@@ -1,0 +1,23 @@
+<!-- Пользователь для MCP-сервера: только чтение и лимиты на запрос.
+     Даже если LLM сгенерирует что-то опасное в run_readonly_sql, ClickHouse его не выполнит. -->
+<clickhouse>
+    <profiles>
+        <mcp_readonly>
+            <!-- readonly=2: запрещены записи и DDL, но клиент может передавать настройки запроса -->
+            <readonly>2</readonly>
+            <max_execution_time>10</max_execution_time>
+            <max_result_rows>1000</max_result_rows>
+            <result_overflow_mode>break</result_overflow_mode>
+            <max_memory_usage>1000000000</max_memory_usage>
+        </mcp_readonly>
+    </profiles>
+    <users>
+        <mcp_readonly>
+            <password from_env="CLICKHOUSE_MCP_PASSWORD"/>
+            <profile>mcp_readonly</profile>
+            <quota>default</quota>
+            <networks><ip>::/0</ip></networks>
+            <allow_databases><database>marketpulse</database></allow_databases>
+        </mcp_readonly>
+    </users>
+</clickhouse>

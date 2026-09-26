@@ -1,0 +1,120 @@
+name: marketpulse
+
+x-go-build: &go-build
+  context: .
+  dockerfile: go.Dockerfile
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: marketpulse
+      POSTGRES_PASSWORD: marketpulse
+      POSTGRES_DB: marketpulse
+    volumes: [pg-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U marketpulse"]
+      interval: 5s
+      retries: 20
+
+  kafka:
+    image: apache/kafka-native:3.8.0
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+    volumes: [kafka-data:/var/lib/kafka/data]
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8-alpine
+    environment:
+      CLICKHOUSE_USER: admin
+      CLICKHOUSE_PASSWORD: admin
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+      CLICKHOUSE_MCP_PASSWORD: ${CLICKHOUSE_MCP_PASSWORD:-mcp_readonly}
+    volumes:
+      - ch-data:/var/lib/clickhouse
+      - ./clickhouse/init:/docker-entrypoint-initdb.d:ro
+      - ./clickhouse/users.d/mcp_readonly.xml:/etc/clickhouse-server/users.d/mcp_readonly.xml:ro
+    ports: ["127.0.0.1:18123:8123"]
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8123/ping"]
+      interval: 5s
+      retries: 30
+
+  mock-marketplace:
+    build: { <<: *go-build, args: { SERVICE: mock-marketplace } }
+    environment:
+      RATE_LIMIT_RPS: 5
+      RATE_LIMIT_BURST: 10
+    ports: ["127.0.0.1:18080:8080"]
+
+  collector:
+    build: { <<: *go-build, args: { SERVICE: collector } }
+    environment:
+      PG_DSN: postgres://marketpulse:marketpulse@postgres:5432/marketpulse
+      KAFKA_BROKERS: kafka:9092
+      MARKET_URL: http://mock-marketplace:8080
+      SELLERS: 1001:demo-key-1001,2002:demo-key-2002
+      CLIENT_RPS: 4
+      POLL_INTERVAL: 60s
+      BACKFILL_DAYS: 30
+    depends_on:
+      postgres: { condition: service_healthy }
+      kafka: { condition: service_started }
+      mock-marketplace: { condition: service_started }
+    restart: unless-stopped
+
+  mcp-server:
+    build: ./mcp-server
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_USER: mcp_readonly
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_MCP_PASSWORD:-mcp_readonly}
+      BITRIX24_WEBHOOK_URL: ${BITRIX24_WEBHOOK_URL:-}
+      BITRIX24_RESPONSIBLE_ID: ${BITRIX24_RESPONSIBLE_ID:-1}
+    depends_on:
+      clickhouse: { condition: service_healthy }
+    ports: ["127.0.0.1:18000:8000"]
+
+  agent-api:
+    build: ./agent-api
+    environment:
+      MCP_URL: http://mcp-server:8000/mcp
+      # Любой OpenAI-совместимый API: OpenRouter (по умолчанию), vLLM, Ollama и т.п.
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://openrouter.ai/api/v1}
+      LLM_API_KEY: ${LLM_API_KEY:?задайте LLM_API_KEY в .env (см. .env.example)}
+      LLM_MODEL: ${LLM_MODEL:-qwen/qwen3.8-27b:free}
+      LLM_FALLBACK_MODELS: ${LLM_FALLBACK_MODELS:-}
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    depends_on: [mcp-server]
+    ports: ["127.0.0.1:18088:8080"]
+
+  dashboard:
+    build: ./dashboard
+    environment:
+      AGENT_API_URL: http://agent-api:8080
+    depends_on: [agent-api]
+    ports: ["127.0.0.1:3300:3000"]
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    profiles: [monitoring]
+    volumes: ["./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+    ports: ["127.0.0.1:19090:9090"]
+
+volumes:
+  pg-data:
+  kafka-data:
+  ch-data:

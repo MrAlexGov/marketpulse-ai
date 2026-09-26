@@ -1,0 +1,4 @@
+fastapi>=0.115,<1
+uvicorn[standard]>=0.30,<1
+mcp>=1.10,<2
+openai>=1.40,<3
