@@ -43,7 +43,8 @@ flowchart LR
 | [`mcp-server`](mcp-server) | Python, MCP SDK, clickhouse-connect | 7 инструментов для агентов, параметризованные запросы, отдельный readonly-пользователь ClickHouse, защита произвольного SQL, интеграция с Битрикс24 |
 | [`agent-api`](agent-api) | Python, FastAPI, OpenAI SDK | Харнесс агента без фреймворка: tool calling поверх MCP, ограничение побочных эффектов, бюджет контекста, лимит шагов, trace вызовов, фолбэк моделей через OpenRouter |
 | [`dashboard`](dashboard) | Next.js 15, React 19, TypeScript | KPI, график, таблицы аномалий и рисков, чат с агентом и раскрываемым trace инструментов |
-| [`monitoring`](monitoring) | Prometheus | Метрики сборщика (запросы по кодам ответа, очередь outbox, длительность синхронизаций) и эмулятора |
+| [`monitoring`](monitoring) | Prometheus, Grafana | Метрики сборщика (запросы по кодам ответа, очередь outbox, длительность синхронизаций) и эмулятора, готовый дашборд Grafana (`--profile monitoring`) |
+| [`deploy`](deploy) | Kubernetes, Helm, kind | Helm-чарт всего стека; установка проверяется в kind в CI (данные доходят до ClickHouse) |
 
 ## Инженерные решения
 
@@ -158,8 +159,7 @@ Go-тесты покрывают детерминированность гене
 
 ## Что дальше
 
-- Kubernetes: Helm-чарт и манифесты, Terraform для кластера.
-- Grafana-дашборды поверх уже собираемых метрик Prometheus.
+- Terraform для кластера (Helm-чарт и Grafana уже есть).
 - vLLM для локального инференса вместо внешнего API.
 - LoRA-дообучение небольшой модели на классификацию причин падения продаж.
 - Реальный кабинет Ozon или Wildberries вместо эмулятора.

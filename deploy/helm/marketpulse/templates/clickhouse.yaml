@@ -1,0 +1,65 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: clickhouse-config
+data:
+  01_schema.sql: |
+{{ .Files.Get "files/01_schema.sql" | indent 4 }}
+  mcp_readonly.xml: |
+{{ .Files.Get "files/mcp_readonly.xml" | indent 4 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: clickhouse
+spec:
+  selector: { app: clickhouse }
+  ports:
+    - { name: http, port: 8123 }
+    - { name: native, port: 9000 }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: clickhouse
+spec:
+  serviceName: clickhouse
+  replicas: 1
+  selector:
+    matchLabels: { app: clickhouse }
+  template:
+    metadata:
+      labels: { app: clickhouse }
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: clickhouse
+          image: clickhouse/clickhouse-server:24.8-alpine
+          ports: [{ containerPort: 8123 }, { containerPort: 9000 }]
+          env:
+            - { name: CLICKHOUSE_USER, value: admin }
+            - { name: CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT, value: "1" }
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: marketpulse, key: clickhouseAdminPassword }
+            - name: CLICKHOUSE_MCP_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: marketpulse, key: clickhouseMcpPassword }
+          readinessProbe:
+            httpGet: { path: /ping, port: 8123 }
+            periodSeconds: 5
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/clickhouse }
+            - { name: config, mountPath: /docker-entrypoint-initdb.d/01_schema.sql, subPath: 01_schema.sql }
+            - { name: config, mountPath: /etc/clickhouse-server/users.d/mcp_readonly.xml, subPath: mcp_readonly.xml }
+          resources:
+            requests: { cpu: 100m, memory: 512Mi }
+      volumes:
+        - name: config
+          configMap: { name: clickhouse-config }
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests: { storage: {{ .Values.storage.clickhouse }} }

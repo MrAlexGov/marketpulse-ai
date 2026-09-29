@@ -1,0 +1,6 @@
+apiVersion: v2
+name: marketpulse
+description: MarketPulse — событийный конвейер (Go, Postgres outbox, Kafka, ClickHouse) и MCP-агент аналитики
+type: application
+version: 0.1.0
+appVersion: "1.0"

@@ -19,3 +19,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker build ./dashboard
+  helm-kind:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Копии SQL/XML в чарте не разошлись с исходниками
+        run: |
+          diff clickhouse/init/01_schema.sql deploy/helm/marketpulse/files/01_schema.sql
+          diff clickhouse/users.d/mcp_readonly.xml deploy/helm/marketpulse/files/mcp_readonly.xml
+      - run: helm lint deploy/helm/marketpulse
+      - name: Сборка образов
+        run: |
+          for s in collector mock-marketplace; do
+            docker build -q -f go.Dockerfile --build-arg SERVICE=$s -t marketpulse/$s:local .
+          done
+          for s in mcp-server agent-api dashboard; do docker build -q -t marketpulse/$s:local $s; done
+      - uses: helm/kind-action@v1
+      - name: Установка чарта в kind
+        run: |
+          for s in collector mock-marketplace mcp-server agent-api dashboard; do
+            kind load docker-image marketpulse/$s:local --name chart-testing
+          done
+          helm install mp deploy/helm/marketpulse --wait --timeout 8m
+      - name: Данные дошли Go → Postgres outbox → Kafka → ClickHouse
+        run: |
+          for i in $(seq 1 30); do
+            n=$(kubectl exec clickhouse-0 -- clickhouse-client -u admin --password admin -q "select count() from marketpulse.postings" || echo 0)
+            [ "$n" -gt 0 ] && echo "postings в ClickHouse: $n" && exit 0
+            sleep 10
+          done
+          kubectl get pods; kubectl logs deploy/collector --tail=30; exit 1

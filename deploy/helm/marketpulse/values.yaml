@@ -1,0 +1,63 @@
+# Образы собираются локально или в CI (см. deploy/README.md) и загружаются в kind.
+image:
+  repository: marketpulse
+  tag: local
+  pullPolicy: IfNotPresent
+
+# Демо-значения. В реальном кластере переопределяйте через --set или внешний Secret.
+secrets:
+  postgresPassword: marketpulse
+  clickhouseAdminPassword: admin
+  clickhouseMcpPassword: mcp_readonly
+  llmApiKey: replace-me   # агент отвечает только с настоящим ключом, health работает и без него
+
+llm:
+  baseUrl: https://openrouter.ai/api/v1
+  model: qwen/qwen3.8-27b:free
+
+storage:
+  postgres: 2Gi
+  kafka: 2Gi
+  clickhouse: 5Gi
+
+# Stateless-сервисы. Каждый превращается в Deployment + Service.
+apps:
+  mock-marketplace:
+    port: 8080
+    metrics: true
+    env:
+      RATE_LIMIT_RPS: "5"
+      RATE_LIMIT_BURST: "10"
+  collector:
+    port: 9100
+    metrics: true
+    service: false
+    secretEnv:
+      - { name: PG_PASSWORD, key: postgresPassword }
+    env:
+      PG_DSN: postgres://marketpulse:$(PG_PASSWORD)@postgres:5432/marketpulse
+      KAFKA_BROKERS: kafka:9092
+      MARKET_URL: http://mock-marketplace:8080
+      SELLERS: 1001:demo-key-1001,2002:demo-key-2002
+      CLIENT_RPS: "4"
+      POLL_INTERVAL: 60s
+      BACKFILL_DAYS: "30"
+  mcp-server:
+    port: 8000
+    secretEnv:
+      - { name: CLICKHOUSE_PASSWORD, key: clickhouseMcpPassword }
+    env:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_USER: mcp_readonly
+      BITRIX24_RESPONSIBLE_ID: "1"
+  agent-api:
+    port: 8080
+    httpProbe: /health
+    secretEnv:
+      - { name: LLM_API_KEY, key: llmApiKey }
+    env:
+      MCP_URL: http://mcp-server:8000/mcp
+  dashboard:
+    port: 3000
+    env:
+      AGENT_API_URL: http://agent-api:8080

@@ -1,0 +1,79 @@
+{{- range $name, $app := .Values.apps }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels: { app: {{ $name }} }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: {{ $name }} }
+  template:
+    metadata:
+      labels: { app: {{ $name }} }
+      {{- if $app.metrics }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ $app.port | quote }}
+        prometheus.io/path: /metrics
+      {{- end }}
+    spec:
+      # Иначе k8s подмешивает env вида KAFKA_PORT=tcp://..., что ломает некоторые образы
+      enableServiceLinks: false
+      containers:
+        - name: {{ $name }}
+          image: {{ $.Values.image.repository }}/{{ $name }}:{{ $.Values.image.tag }}
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          ports:
+            - containerPort: {{ $app.port }}
+          env:
+            {{- /* secretEnv идёт первым: только на ранее объявленные переменные можно ссылаться через $(VAR) */}}
+            {{- range $app.secretEnv }}
+            - name: {{ .name }}
+              valueFrom:
+                secretKeyRef: { name: marketpulse, key: {{ .key }} }
+            {{- end }}
+            {{- range $k, $v := $app.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+            {{- if eq $name "agent-api" }}
+            - name: LLM_BASE_URL
+              value: {{ $.Values.llm.baseUrl | quote }}
+            - name: LLM_MODEL
+              value: {{ $.Values.llm.model | quote }}
+            {{- end }}
+          readinessProbe:
+            {{- if $app.httpProbe }}
+            httpGet: { path: {{ $app.httpProbe }}, port: {{ $app.port }} }
+            {{- else }}
+            tcpSocket: { port: {{ $app.port }} }
+            {{- end }}
+            periodSeconds: 5
+          livenessProbe:
+            {{- if $app.httpProbe }}
+            httpGet: { path: {{ $app.httpProbe }}, port: {{ $app.port }} }
+            {{- else }}
+            tcpSocket: { port: {{ $app.port }} }
+            {{- end }}
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+{{- if ne (toString $app.service) "false" }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+spec:
+  selector: { app: {{ $name }} }
+  ports:
+    - port: {{ $app.port }}
+      targetPort: {{ $app.port }}
+{{- end }}
+{{- end }}
